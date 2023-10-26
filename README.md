@@ -161,4 +161,4 @@ In this solution, we demonstrated how to process Amazon Pinpoint email unsubscri
 See [CONTRIBUTING](./CONTRIBUTING.md) for more information.
 
 ## License
-See [LICENSE](./LICENSE.txt) for more information.
+See [LICENSE](./LICENSE) for more information.

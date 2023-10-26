@@ -1,0 +1,1557 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Automatically configures a solution to process unsubscribe events from Amazon Pinpoint email campaigns
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Source Configuration
+        Parameters:
+          - SourceBucketName
+      - Label:
+          default: Pinpoint Configuration
+        Parameters:
+          - PinpointProjectName
+          - MessageTemplateName
+          - PinpointEmailIdentity
+          - PinpointSenderAddress
+      - Label:
+          default: Amazon Athena Configuration
+        Parameters:
+          - EventAthenaDatabaseName
+      - Label:
+          default: Unsubscribe Handling
+        Parameters:
+          - AddToSesSuppressionList
+          - AddToSegmentOptOut
+
+    ParameterLabels:
+      SourceBucketName:
+        default: S3 Source Bucket Name
+      PinpointProjectName:
+        default: Pinpoint Project Name
+      MessageTemplateName: 
+        default: Message Template Name
+      PinpointEmailIdentity:
+        default: Pinpoint Verified Email Identity
+      PinpointSenderAddress:
+        default: Pinpoint Sender Address
+      EventAthenaDatabaseName:
+        default: Amazon Athena / AWS Glue Database Name
+      AddToSesSuppressionList:
+        default: Add Endpoint to SES Suppression List?
+      AddToSegmentOptOut:
+        default: Add Endpoint to Pinpoint Segment OptOut List?
+
+Parameters:
+  SourceBucketName:
+    Type: String
+    Description: Enter the S3 bucket name where your source files are stored
+  PinpointProjectName:
+    Type: String
+    Description: Enter the desired name for your Pinpoint project
+    Default: DemoUnsubscribeProject
+  MessageTemplateName:
+    Type: String
+    Description: Enter the desired name for your Pinpoint message template
+    Default: DemoMessageTemplate
+  PinpointEmailIdentity:
+    Type: String
+    Description: Enter the ARN of your verified email identity (domain)
+  PinpointSenderAddress:
+    Type: String
+    Description: Enter the default email address you wish to send from (must match domain)
+  EventAthenaDatabaseName:
+    Type: String
+    Description: Name of the Athena database created in Glue, must be lowercase
+    Default: "demo_event_db"
+    AllowedPattern: ^[a-z][a-z0-9_]*$
+    ConstraintDescription: Only lower case and the underscore (_) characters are allowed
+  AddToSesSuppressionList:
+    Type: String
+    Description: Select 'true' for yes or 'false' for no
+    Default: true
+    AllowedValues:
+      - true
+      - false
+  AddToSegmentOptOut:
+    Type: String
+    Description: Select 'true' for yes or 'false' for no
+    Default: true
+    AllowedValues:
+      - true
+      - false
+
+Mappings:
+  LambdaRuntime:
+    Language:
+      Python: python3.11
+
+Resources:
+  # Creates a Pinpoint project
+  PinpointProject:
+    Type: AWS::Pinpoint::App
+    Properties:
+      Name: !Ref PinpointProjectName
+  
+  # Enables the email channel on the project
+  PinpointEmailChannel:
+    Type: AWS::Pinpoint::EmailChannel
+    Properties: 
+      ApplicationId: !Ref PinpointProject
+      Enabled: True
+      FromAddress: !Ref PinpointSenderAddress
+      Identity: !Ref PinpointEmailIdentity
+
+  # Creates a Pinpoint message template
+  PinpointEmailTemplate: 
+    Type: AWS::Pinpoint::EmailTemplate
+    Properties: 
+      Subject: Welcome to Amazon Pinpoint!
+      TemplateName: !Ref MessageTemplateName
+      HtmlPart: |
+        <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+        <html xmlns="http://www.w3.org/1999/xhtml">
+
+        <head style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+          <meta name="viewport" content="width=device-width" style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+          <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+          <title style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">Amazon Pinpoint</title>
+        </head>
+
+        <body bgcolor="#F2F3F3" topmargin="0" leftmargin="0" marginheight="0" marginwidth="0"
+          style="-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:none;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;height:100%;margin:0;padding:0;width:100%!important">
+          <style>
+            @media only screen and (max-width:600px) {
+              a[class=btn] {
+                display: block !important;
+                margin-bottom: 10px !important;
+                background-image: none !important;
+                margin-right: 0 !important
+              }
+
+              div[class=column] {
+                width: auto !important;
+                float: none !important
+              }
+
+              table.social div[class=column] {
+                width: auto !important
+              }
+            }
+          </style>
+          <p style="display:none;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">Thank you for contacting us to arrange a demo of Amazon Pinpoint. Someone
+            from our team will contact you within the next 5–7 business days to talk about your use case.</p>
+          <table class="head-wrap" bgcolor="#16191F" style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:100%">
+            <tbody>
+              <tr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"><img style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;height:35px;margin:0;max-width:100%;padding:12px;width:58px"
+                    src="https://logos-world.net/wp-content/uploads/2021/08/Amazon-Web-Services-AWS-Logo.png"></td>
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"></td>
+              </tr>
+              <tr bgcolor="#232F3D" style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                  <div style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;height:14px;margin:0;padding:0"></div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <table class="body-wrap" style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:100%">
+            <tbody>
+              <tr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"></td>
+                <td class="container" bgcolor="#FFFFFF" style="clear:both!important;display:block!important;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0 auto!important;max-width:602px!important;padding:0">
+                  <div class="content"
+                    style="border-left:1px solid #c9cfd0;border-right:1px solid #c9cfd0;border-top:1px solid #c9cfd0;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:1rem auto 0 auto;max-width:600px;padding:15px">
+                    <h1 style="color:#000;font-family:HelveticaNeue-Light,'Helvetica Neue Light','Helvetica Neue',Helvetica,Arial,'Lucida Grande',sans-serif;font-size:44px;font-weight:200;line-height:1.1;margin:0;margin-bottom:15px;padding:0">Congratulations!</h1>
+                  </div>
+                  <div class="column-wrap"
+                    style="border-bottom:1px solid #c9cfd0;border-left:1px solid #c9cfd0;border-right:1px solid #c9cfd0;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0 auto;max-width:600px!important;padding:0!important">
+                    <div class="column" style="float:left;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:300px">
+                      <table style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:100%">
+                        <tbody>
+                          <tr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                            <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:15px">
+                              <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">You did it! You successfully sent your first email campaign using Amazon Pinpoint. We hope this is the first step in our journey together, and we're excited to see what you build!</p>
+                              <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">Ready to learn more? You can find news, information, and helpful solutions on the  <a href="https://aws.amazon.com/blogs/messaging-and-targeting/"
+                                  style="color:#2BA6CB;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;text-decoration:none">AWS Messaging and Targeting blog</a>.</p>
+                              <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">Thank you,</p>
+                              <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">The Amazon Pinpoint team</p>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="column" style="float:left;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:300px">
+                      <table style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:100%">
+                        <tbody>
+                          <tr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                            <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:15px">
+                              <ul class="sidebar"
+                                style="background:#f2f3f3;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:14px;font-weight:400;line-height:1.6;list-style-type:none;margin:0;margin-bottom:10px;padding:0">
+                                <li style="display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;list-style-position:inside;margin:0;margin-left:5px;padding:0"><a
+                                    style="color:#666;cursor:pointer;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;margin-right:10px;padding:6px 10px;text-decoration:none">
+                                    <h5
+                                      style="color:#000;font-family:HelveticaNeue-Light,'Helvetica Neue Light','Helvetica Neue',Helvetica,Arial,'Lucida Grande',sans-serif;font-size:17px;font-weight:900;line-height:1.1;margin:0;margin-bottom:0!important;padding:0">
+                                      Helpful resources</h5>
+                                  </a></li>
+                                <li style="display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;list-style-position:inside;margin:0;margin-left:5px;padding:0"><a
+                                    href="https://docs.aws.amazon.com/pinpoint/latest/userguide/gettingstarted.html" class=""
+                                    style="color:#666;cursor:pointer;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;margin-right:10px;padding:6px 10px;text-decoration:none">Get started with Amazon Pinpoint »</a></li>
+                                <li style="display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;list-style-position:inside;margin:0;margin-left:5px;padding:0"><a href="https://docs.aws.amazon.com/pinpoint/" class=""
+                                    style="color:#666;cursor:pointer;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;margin-right:10px;padding:6px 10px;text-decoration:none">Amazon Pinpoint documentation »</a></li>
+                                <li style="display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;list-style-position:inside;margin:0;margin-left:5px;padding:0"><a href="https://aws.amazon.com/blogs/messaging-and-targeting/" class=""
+                                    style="color:#666;cursor:pointer;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;margin-right:10px;padding:6px 10px;text-decoration:none">AWS Messaging &amp; Targeting blog »</a>
+                                </li>
+                                <li style="display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;list-style-position:inside;margin:0;margin-left:5px;padding:0"><a href="https://aws.amazon.com/pinpoint/pricing/" class=""
+                                    style="color:#666;cursor:pointer;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;margin-right:10px;padding:6px 10px;text-decoration:none">Amazon Pinpoint pricing »</a></li>
+                              </ul>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="clear" style="clear:both;display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"></div>
+                  </div>
+                </td>
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"></td>
+              </tr>
+            </tbody>
+          </table>
+          <table class="footer-wrap" style="clear:both!important;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;width:100%">
+            <tbody>
+              <tr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"></td>
+                <td class="container" style="clear:both!important;display:block!important;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0 auto!important;max-width:602px!important;padding:0">
+                  <div class="content-footer" style="display:block;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0 auto;max-width:600px;padding:15px">
+                    <table style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                      <tbody>
+                        <tr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                          <td align="center" style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0">
+                            <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:x-small;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">If you would like to unsubscribe <a ses:tags="unsubscribeLinkTag:optout;" href="https://aws.amazon.com">Click Here</a>.</p>
+                            <hr style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;margin-bottom:10px;padding:0">
+                            <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:x-small;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">Amazon Web Services, Inc. is a subsidiary of Amazon.com, Inc.
+                              Amazon.com is a registered trademark of Amazon.com. This message was produced and distributed by Amazon Web Services, Inc. and its affiliates, 410 Terry Ave. North, Seattle, WA 98109.</p>
+                            <p style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;font-size:x-small;font-weight:400;line-height:1.6;margin:0;margin-bottom:10px;padding:0">© 2022, Amazon Web Services, Inc. or its affiliates. All rights
+                              reserved. Read our <a href="https://aws.amazon.com/privacy" style="color:#2BA6CB;font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0;text-decoration:none">Privacy Policy</a>.</p>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </td>
+                <td style="font-family:'Helvetica Neue',Helvetica,Helvetica,Arial,sans-serif;margin:0;padding:0"></td>
+              </tr>
+            </tbody>
+          </table>
+        </body>
+
+        </html>
+
+  # Creates an S3 bucket for Pinpoint events
+  PinpointEventsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join ['-', ['pinpoint-events', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      OwnershipControls:
+        Rules:
+         - ObjectOwnership: BucketOwnerPreferred
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: "prefix"
+                    Value: "events/"
+            Function: !GetAtt AthenaPartitionLambda.Arn
+
+  # Configures an S3 bucket policy on events bucket
+  PinpointEventsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PinpointEventsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowSSLRequestsOnly
+          Effect: Deny
+          Principal: "*"
+          Action: "s3:*"
+          Resource:
+            - !Sub "arn:aws:s3:::${PinpointEventsBucket}/*"
+            - !Sub "arn:aws:s3:::${PinpointEventsBucket}"
+          Condition:
+            Bool:
+              "aws:SecureTransport": "false"
+
+  # Configures a Lambda resource-based policy
+  S3InvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AthenaPartitionLambda
+      Principal: s3.amazonaws.com
+      SourceArn: !Join ['-', ['arn:aws:s3:::pinpoint-events', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      SourceAccount: !Ref "AWS::AccountId"
+
+  # Configures a Pinpoint event stream
+  PinpointEventStream:
+    Type: AWS::Pinpoint::EventStream
+    Properties:
+      ApplicationId: !Ref PinpointProject
+      DestinationStreamArn: !GetAtt PinpointEventFirehose.Arn
+      RoleArn: !GetAtt PinpointKinesisStreamRole.Arn
+
+  # Creates a Kinesis Firehose delivery stream
+  PinpointEventFirehose:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    DependsOn: LoadLambdaHelper
+    Properties:
+      DeliveryStreamName: !Join ['-', ['PinpointEventFirehose', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      DeliveryStreamType: "DirectPut"
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Sub "arn:aws:s3:::${PinpointEventsBucket}"
+        BufferingHints:
+          IntervalInSeconds: 300
+          SizeInMBs: 128
+        DataFormatConversionConfiguration:
+          Enabled: true
+          InputFormatConfiguration:
+            Deserializer:
+              OpenXJsonSerDe: {}
+          OutputFormatConfiguration:
+            Serializer:
+              ParquetSerDe: {}
+          SchemaConfiguration:
+            DatabaseName: !Ref PinpointEventDatabase
+            Region: !Ref AWS::Region
+            RoleARN: !GetAtt PinpointKinesisFirehoseRole.Arn
+            TableName: "all_events"
+            VersionId: "LATEST"
+            CatalogId: !Ref AWS::AccountId
+        CompressionFormat: "UNCOMPRESSED"
+        Prefix: "events/"
+        ErrorOutputPrefix: "errors/"
+        RoleARN: !GetAtt PinpointKinesisFirehoseRole.Arn
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Join ['-', ['/aws/kinesisfirehose/PinpointEventFirehose', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+          LogStreamName: "S3DeliveryErrors"
+
+  # Creates a log group for Kinesis Firehose delivery stream
+  KinesisFirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['-', ['/aws/kinesisfirehose/PinpointEventFirehose', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      RetentionInDays: 30
+
+  # Creates a log stream for Kinesis Firehose delivery stream
+  KinesisFirehoseLogStreamName:
+    Type: AWS::Logs::LogStream
+    DependsOn: KinesisFirehoseLogGroup
+    Properties:
+      LogGroupName: !Join ['-', ['/aws/kinesisfirehose/PinpointEventFirehose', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      LogStreamName: "S3DeliveryErrors"
+
+  # Creates an IAM role for Pinpoint event stream
+  PinpointKinesisStreamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', ['PinpointKinesisStreamRole', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "pinpoint.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  - !Ref AWS::AccountId
+      Path: "/"
+      Policies:
+        - PolicyName: "AllowDeliveryToKinesisFirehose"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "firehose:PutRecordBatch"
+                  - "firehose:DescribeDeliveryStream"
+                Resource: !GetAtt PinpointEventFirehose.Arn
+
+  # Creates an IAM role for Kinesis Firehose delivery stream
+  PinpointKinesisFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', ['PinpointKinesisFirehoseRole', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "firehose.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "AllowAccessToS3GlueCloudWatch"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "s3:AbortMultipartUpload"
+                  - "s3:GetBucketLocation"
+                  - "s3:GetObject"
+                  - "s3:ListBucket"
+                  - "s3:ListBucketMultipartUploads"
+                  - "s3:PutObject"
+                Resource:
+                  - !Sub "arn:aws:s3:::${PinpointEventsBucket}/*"
+                  - !Sub "arn:aws:s3:::${PinpointEventsBucket}"
+              - Effect: "Allow"
+                Action:
+                  - "glue:GetTable"
+                  - "glue:GetTableVersion"
+                  - "glue:GetTableVersions"
+                Resource:
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${EventAthenaDatabaseName}/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${EventAthenaDatabaseName}"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+              - Effect: "Allow"
+                Action: "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/*:log-stream:*"
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # Creates a Glue database for Pinpoint events
+  PinpointEventDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref EventAthenaDatabaseName
+        Description: "SES and Pinpoint Streaming Event Database"
+
+  # Creates all_events named query in Athena
+  EventTableAllNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref EventAthenaDatabaseName
+      Description: "Create a Table for All events"
+      QueryString:
+        !Sub
+          |
+            CREATE EXTERNAL TABLE IF NOT EXISTS `all_events` (
+              event_type string,
+              event_timestamp bigint,
+              arrival_timestamp bigint,
+              event_version string,
+              application struct<app_id:string,sdk:map<string,string>>,
+              client struct<client_id:string,cognito_id:string>,
+              device struct<platform:map<string,string>>,
+              session map<string,string>,
+              attributes map<string,string>,
+              client_context struct<custom:map<string,string>>,
+              awsAccountId string,
+              facets struct<
+                email_channel:struct<
+                  mail_event:struct<
+                    mail:struct<
+                      message_id:string,
+                      message_send_timestamp:bigint,
+                      from_address:string,
+                      destination:array<string>,
+                      headers_truncated:boolean,
+                      headers:array<map<string,string>>,
+                      common_headers:struct<
+                        `from`:string,
+                        to:array<string>,
+                        subject:string
+                      >
+                    >,
+                    send:map<string,string>,
+                    delivery:struct<
+                      smtp_response:string,
+                      reporting_mta:string,
+                      recipients:array<string>,
+                      processing_time_millis:int
+                    >,
+                    `open`:struct<
+                      `ip_address`:string,
+                      `user_agent`:string
+                    >,
+                    `click`:struct<
+                      `ip_address`:string,
+                      `user_agent`:string,
+                      `link`:string,
+                      `link_tags`:struct<
+                        `unsubscribeLinkTag`:array<string>
+                      >
+                    >,
+                    reject:struct<
+                      reason:string
+                    >,
+                    complaint:struct<
+                      complained_recipients:array<struct<email_address:string>>,
+                      feedback_id:string,
+                      user_agent:string,
+                      complaint_feedback_type:string
+                    >,
+                    `bounce`:struct<
+                      bounce_type:string,
+                      bounce_sub_type:string,
+                      bounced_recipients:array<struct<email_address:string,`action`:string,`status`:string,diagnostic_code:string>>,
+                      feedback_id:string,
+                      reporting_mta:string
+                    >
+                  >
+                >
+              >,
+              metrics struct<price_in_millicents_usd:double>
+            )
+            PARTITIONED BY (ingest_timestamp timestamp)
+            STORED AS parquet
+            LOCATION 's3://${PinpointEventsBucket}/events'
+            TBLPROPERTIES ("parquet.compression"="SNAPPY")
+
+  # Creates email_send named query in Athena
+  EventTableSendNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Send View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_send AS
+            SELECT
+                from_unixtime((event_timestamp / 1000)) event_timestamp
+              , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+              , application.app_id application_id
+              , client.client_id endpoint_id
+              , attributes['campaign_id'] pinpoint_campaign_id
+              , attributes['treament_id'] pinpoint_treatment_id
+              , awsaccountid aws_account_id
+              , facets.email_channel.mail_event.mail.message_id message_id
+              , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+              , facets.email_channel.mail_event.mail.from_address from_address
+              , facets.email_channel.mail_event.mail.destination destination
+              , facets.email_channel.mail_event.mail.common_headers.subject as subject
+              , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+              , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_email.send')
+
+  # Creates email_hardbounce named query in Athena
+  EventTableHardBounceNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Hard Bounce View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_hardbounce AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.bounce.bounce_type as bounce_type
+            , facets.email_channel.mail_event.bounce.bounce_sub_type as bounce_sub_type
+            , facets.email_channel.mail_event.bounce.feedback_id as feedback_id
+            , facets.email_channel.mail_event.bounce.reporting_mta as reporting_mta
+            , bounced_recipient.email_address as bounced_recipient_email_address
+            , bounced_recipient.action as bounced_recipient_action
+            , bounced_recipient.status as bounced_recipient_status
+            , bounced_recipient.diagnostic_code as bounced_recipient_diagnostic_code
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+              CROSS JOIN UNNEST(facets.email_channel.mail_event.bounce.bounced_recipients) as t(bounced_recipient)
+            WHERE (event_type = '_email.hardbounce')
+
+  # Creates email_softbounce named query in Athena
+  EventTableSoftBounceNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Soft Bounce View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_softbounce AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.bounce.bounce_type as bounce_type
+            , facets.email_channel.mail_event.bounce.bounce_sub_type as bounce_sub_type
+            , facets.email_channel.mail_event.bounce.feedback_id as feedback_id
+            , facets.email_channel.mail_event.bounce.reporting_mta as reporting_mta
+            , bounced_recipient.email_address as bounced_recipient_email_address
+            , bounced_recipient.action as bounced_recipient_action
+            , bounced_recipient.status as bounced_recipient_status
+            , bounced_recipient.diagnostic_code as bounced_recipient_diagnostic_code
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+              CROSS JOIN UNNEST(facets.email_channel.mail_event.bounce.bounced_recipients) as t(bounced_recipient)
+            WHERE (event_type = '_email.softbounce')
+
+  # Creates email_complaint named query in Athena
+  EventTableComplaintNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Complaint View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_complaint AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , complained_recipient.email_address as complained_email_address
+            , facets.email_channel.mail_event.complaint.feedback_id as feedback_id
+            , facets.email_channel.mail_event.complaint.user_agent as user_agent
+            , facets.email_channel.mail_event.complaint.complaint_feedback_type as complaint_feedback_type
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+              CROSS JOIN UNNEST(facets.email_channel.mail_event.complaint.complained_recipients) as t(complained_recipient)
+            WHERE (event_type = '_email.complaint')
+
+  # Creates email_delivered named query in Athena
+  EventTableDeliveryNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Delivered View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_delivered AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.mail.common_headers.subject as subject
+            , facets.email_channel.mail_event.delivery.smtp_response as smtp_response
+            , facets.email_channel.mail_event.delivery.reporting_mta as reporting_mta
+            , facets.email_channel.mail_event.delivery.recipients as recipients
+            , facets.email_channel.mail_event.delivery.processing_time_millis as processing_time_millis
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_email.delivered')
+
+  # Creates email_open named query in Athena
+  EventTableOpenNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Open View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_open AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.mail.common_headers.subject as subject
+            , facets.email_channel.mail_event.open.ip_address as ip_address
+            , facets.email_channel.mail_event.open.user_agent as user_agent
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_email.open')
+
+  # Creates email_click named query in Athena
+  EventTableClickNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Click View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_click AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.mail.common_headers.subject as subject
+            , facets.email_channel.mail_event.click.ip_address as ip_address
+            , facets.email_channel.mail_event.click.user_agent as user_agent
+            , facets.email_channel.mail_event.click.link as link
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_email.click')
+
+  # Creates email_unsubscribe named query in Athena
+  EventTableUnsubNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Unsub View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_unsubscribe AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.mail.common_headers.subject as subject
+            , facets.email_channel.mail_event.click.ip_address as ip_address
+            , facets.email_channel.mail_event.click.user_agent as user_agent
+            , facets.email_channel.mail_event.click.link as link
+            , facets.email_channel.mail_event.click.link_tags.unsubscribeLinkTag
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_email.unsubscribe')
+
+  # Creates email_rejected named query in Athena
+  EventTableRejectNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Email Reject View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW email_rejected AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , facets.email_channel.mail_event.mail.message_id message_id
+            , from_unixtime((facets.email_channel.mail_event.mail.message_send_timestamp / 1000)) message_send_timestamp
+            , facets.email_channel.mail_event.mail.from_address from_address
+            , facets.email_channel.mail_event.mail.destination destination
+            , facets.email_channel.mail_event.mail.common_headers.subject as subject
+            , facets.email_channel.mail_event.reject.reason as reject_reason
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_email.rejected')
+
+  # Creates campaign_send named query in Athena
+  EventTableCampaignSendNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Campaign Send View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW campaign_send AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['campaign_id'] pinpoint_campaign_id
+            , attributes['treament_id'] pinpoint_treatment_id
+            , awsaccountid aws_account_id
+            , attributes as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_campaign.send')
+
+  # Creates journey_send named query in Athena
+  EventTableJourneySendNamedQuery:
+    Type: AWS::Athena::NamedQuery
+    DeletionPolicy: Delete
+    Properties:
+      Database: !Ref PinpointEventDatabase
+      Description: "Create the Journey Send View"
+      QueryString:
+        !Sub
+          |
+            CREATE OR REPLACE VIEW journey_send AS
+            SELECT
+              from_unixtime((event_timestamp / 1000)) event_timestamp
+            , from_unixtime((arrival_timestamp / 1000)) arrival_timestamp
+            , application.app_id application_id
+            , client.client_id endpoint_id
+            , attributes['journey_run_id'] journey_run_id
+            , attributes['journey_send_status'] journey_send_status
+            , attributes['journey_id'] journey_id
+            , attributes['journey_activity_id'] journey_activity_id
+            , awsaccountid aws_account_id
+            , MAP_CONCAT(COALESCE(client_context.custom, CAST(JSON '{}' AS MAP(varchar,varchar))),  attributes) as message_tags
+            , ingest_timestamp
+            FROM
+              all_events
+            WHERE (event_type = '_journey.send')
+
+  # Creates a CloudWatch log group for Athena dynamic partitioning Lamdba function
+  AthenaPartitionLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Join ['-', ['/aws/lambda/AthenaPartitionLambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      RetentionInDays: 30
+
+  # Creates a Lamdba function for Athena dynamic partitioning
+  AthenaPartitionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', ['AthenaPartitionLambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      Description: Adds Athena Partitions Dynamically 
+      Role: !GetAtt AthenaPartitionLambdaRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          LOG_LEVEL: "INFO"
+          DATABASE_NAME: !Ref EventAthenaDatabaseName
+      Handler: lambda_function.lambda_handler
+      Runtime: !FindInMap ["LambdaRuntime", "Language", "Python"]
+      Code:
+        S3Bucket: !Ref SourceBucketName
+        S3Key: "athena-partition-lambda.zip"
+
+  # Creates an IAM role for Athena dynamic partition Lambda function
+  AthenaPartitionLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', ['AthenaPartitionLambdaRole', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  - !Ref AWS::AccountId
+      Path: "/"
+      Policies:
+        - PolicyName: "AllowLoggingToCloudWatch"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # Creates an IAM policy for Athena dynamic partition Lambda function
+  AthenaPartitionLambdaRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      Roles:
+        - !Ref AthenaPartitionLambdaRole
+      PolicyName: !Join ['-', ['AthenaPartitionLambdaRolePolicy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - "s3:GetBucketLocation"
+              - "s3:GetObject"
+              - "s3:ListBucket"
+              - "s3:ListBucketMultipartUploads"
+              - "s3:ListMultipartUploadParts"
+              - "s3:AbortMultipartUpload"
+              - "s3:CreateBucket"
+              - "s3:PutObject"
+            Resource:
+              - !Sub arn:aws:s3:::${PinpointEventsBucket}
+              - !Sub arn:aws:s3:::${PinpointEventsBucket}/*
+          - Effect: "Allow"
+            Action:
+              - "athena:StartQueryExecution"
+            Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+          - Effect: "Allow"
+            Action:
+              - "glue:GetDatabase"
+              - "glue:GetDatabases"
+              - "glue:GetTable"
+              - "glue:GetTables"
+              - "glue:GetPartition"
+              - "glue:GetPartitions"
+              - "glue:CreateTable"
+              - "glue:CreatePartition"
+              - "glue:BatchCreatePartition"
+            Resource:
+              - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${EventAthenaDatabaseName}/*"
+              - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${EventAthenaDatabaseName}"
+              - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+          - Effect: "Allow"
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # Creates a custom resource Lamdba function for Athena named query creation
+  LoadLambdaHelper:
+    Type: Custom::LoadLambda
+    Properties:
+      ServiceToken: !GetAtt CustomResourceLambda.Arn
+      CustomResourceAction: SetupNamedQueries
+
+  # Creates a CloudWatch log group for Athena named query creation Lamdba function
+  CustomResourceLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Join ['-', ['/aws/lambda/CustomResourceLambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      RetentionInDays: 30
+
+  # Creates a Lamdba function for Athena named query creation
+  CustomResourceLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-', ['CustomResourceLambda', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      Environment:
+        Variables:
+          LOG_LEVEL: "INFO"
+          S3_DATA_BUCKET: !Ref PinpointEventsBucket
+          ALL_EVENT_TABLE: !Ref EventTableAllNamedQuery
+          SEND_NQ: !Ref EventTableSendNamedQuery
+          HARD_BOUNCE_NQ: !Ref EventTableHardBounceNamedQuery
+          SOFT_BOUNCE_NQ: !Ref EventTableSoftBounceNamedQuery
+          COMPLAINT_NQ: !Ref EventTableComplaintNamedQuery
+          DELIVERY_NQ: !Ref EventTableDeliveryNamedQuery
+          OPEN_NQ: !Ref EventTableOpenNamedQuery
+          CLICK_NQ: !Ref EventTableClickNamedQuery
+          UNSUB_NQ: !Ref EventTableUnsubNamedQuery
+          REJECT_NQ: !Ref EventTableRejectNamedQuery
+          CAMPAIGN_SEND_NQ: !Ref EventTableCampaignSendNamedQuery
+          JOURNEY_SEND_NQ: !Ref EventTableJourneySendNamedQuery
+      Description: Adds Athena Named Queries
+      MemorySize: 256
+      Role: !GetAtt CustomResourceLambdaRole.Arn
+      Timeout: 300
+      Handler: lambda_function.lambda_handler
+      Runtime: !FindInMap ["LambdaRuntime", "Language", "Python"]
+      Code:
+        S3Bucket: !Ref SourceBucketName
+        S3Key: "custom-resource-lambda.zip"
+
+  # Creates an IAM role for Athena named query Lambda function
+  CustomResourceLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', ['CustomResourceLambdaRole', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  - !Ref AWS::AccountId
+      Path: /
+      Policies:
+        - PolicyName: "AllowLoggingToCloudWatch"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  # Creates an IAM policy for Athena named query Lambda function
+  CustomResourceLambdaPolicy:
+      Type: AWS::IAM::Policy
+      Properties:
+        Roles:
+          - !Ref CustomResourceLambdaRole
+        PolicyName: !Join ['-', ['CustomResourceLambdaPolicy', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - "s3:GetBucketLocation"
+                - "s3:GetObject"
+                - "s3:ListBucket"
+                - "s3:ListBucketMultipartUploads"
+                - "s3:ListMultipartUploadParts"
+                - "s3:AbortMultipartUpload"
+                - "s3:CreateBucket"
+                - "s3:PutObject"
+              Resource:
+                - !Sub "arn:aws:s3:::${PinpointEventsBucket}"
+                - !Sub "arn:aws:s3:::${PinpointEventsBucket}*"
+            - Effect: "Allow"
+              Action:
+                - "athena:StartQueryExecution"
+                - "athena:GetNamedQuery"
+                - "athena:BatchGetNamedQuery"
+                - "athena:GetQueryExecution"
+              Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+            - Effect: "Allow"
+              Action:
+                - "glue:GetDatabase"
+                - "glue:GetDatabases"
+                - "glue:GetTable"
+                - "glue:GetTables"
+                - "glue:GetPartition"
+                - "glue:GetPartitions"
+                - "glue:CreateTable"
+              Resource:
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${EventAthenaDatabaseName}/*"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${EventAthenaDatabaseName}"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+            - Effect: "Allow"
+              Action:
+                - ses:CreateConfigurationSetEventDestination
+              Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/*"
+            - Effect: "Allow"
+              Action:
+                - mobiletargeting:GetApp
+              Resource: !Sub
+                - 'arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:apps/${ProjectId}'
+                - {ProjectId: !Ref PinpointProject}
+            - Effect: "Allow"
+              Action:
+                - "logs:CreateLogGroup"
+                - "logs:CreateLogStream"
+                - "logs:PutLogEvents"
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+  
+  # Creates an EventBridge schedule for processing Pinpoint unsubscribe events
+  EventBridgeSchedule:
+    Type: "AWS::Scheduler::Schedule"
+    Properties:
+      Name: !Join ['-', ['ProcessPinpointUnsubscribes', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      Description: EventBridge Schedule to Invoke Step Functions
+      State: ENABLED
+      GroupName: default
+      ScheduleExpression: rate(5 minutes)
+      FlexibleTimeWindow: 
+        Mode: "OFF"
+      Target: 
+        Arn: !GetAtt StepFunctionsStateMachine.Arn
+        Input: !Sub |
+            {
+                "AddToSegmentOptOut": ${AddToSegmentOptOut},
+                "AddToSesSuppressionList": ${AddToSesSuppressionList}
+            }
+        RetryPolicy: 
+            MaximumEventAgeInSeconds: 86400
+            MaximumRetryAttempts: 5
+        RoleArn: !GetAtt EventBridgeRole.Arn
+
+  # Creates an IAM role for the EventBridge schedule
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join ['-', ['ProcessPinpointUnsubscribesEventBridgeRole', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "scheduler.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  - !Ref AWS::AccountId
+      Path: "/"
+      Policies:
+        - PolicyName: "AllowStepFunctionsInvocation"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "states:StartExecution"
+                Resource: 
+                  - !GetAtt StepFunctionsStateMachine.Arn
+
+  # Creates an IAM role for the Step Functions process Pinpoint unsubscribes state machine
+  StepFunctionsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join ['-', ['ProcessPinpointUnsubscribesStepFunctionsRole', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      Description: Allows Step Functions permission to execute and log events
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "states.amazonaws.com"
+            Action: "sts:AssumeRole"
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  - !Ref AWS::AccountId
+      Path: /
+      Policies:
+        - PolicyName: AllowLoggingToCloudWatch
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogDelivery"
+                  - "logs:GetLogDelivery"
+                  - "logs:UpdateLogDelivery"
+                  - "logs:DeleteLogDelivery"
+                  - "logs:ListLogDeliveries"
+                  - "logs:PutResourcePolicy"
+                  - "logs:DescribeResourcePolicies"
+                  - "logs:DescribeLogGroups"
+                Resource: '*'
+        - PolicyName: AllowPinpointUpdateEndpoint
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "mobiletargeting:UpdateEndpoint"
+                Resource: !Sub "arn:aws:mobiletargeting:${AWS::Region}:${AWS::AccountId}:apps/*/endpoints/*"
+        - PolicyName: AllowSesPutSuppressedDestination
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ses:PutSuppressedDestination"
+                Resource: "*"
+        - PolicyName: AllowReadWriteToDynamoDb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:PutItem"
+                  - "dynamodb:UpdateItem"
+                  - "dynamodb:DeleteItem"
+                Resource: !GetAtt UnsubscribeTrackingDB.Arn
+        - PolicyName: AllowAccessToAthena
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "athena:getQueryExecution"
+                  - "athena:getQueryResults"
+                  - "athena:startQueryExecution"
+                  - "athena:getDataCatalog"
+                Resource: 
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/primary"
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/*"
+        - PolicyName: AllowAccessToGlue
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "glue:CreateDatabase"
+                  - "glue:GetDatabase"
+                  - "glue:GetDatabases"
+                  - "glue:UpdateDatabase"
+                  - "glue:DeleteDatabase"
+                  - "glue:CreateTable"
+                  - "glue:UpdateTable"
+                  - "glue:GetTable"
+                  - "glue:GetTables"
+                  - "glue:DeleteTable"
+                  - "glue:BatchDeleteTable"
+                  - "glue:BatchCreatePartition"
+                  - "glue:CreatePartition"
+                  - "glue:UpdatePartition"
+                  - "glue:GetPartition"
+                  - "glue:GetPartitions"
+                  - "glue:BatchGetPartition"
+                  - "glue:DeletePartition"
+                  - "glue:BatchDeletePartition"
+                Resource: 
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:userDefinedFunction/*"
+        - PolicyName: AllowAccessToLakeFormation
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lakeformation:GetDataAccess"
+                Resource: 
+                  - "*"
+        - PolicyName: AllowAccessToS3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetBucketLocation"
+                  - "s3:GetObject"
+                  - "s3:ListBucket"
+                  - "s3:ListBucketMultipartUploads"
+                  - "s3:ListMultipartUploadParts"
+                  - "s3:AbortMultipartUpload"
+                  - "s3:CreateBucket"
+                  - "s3:PutObject"
+                Resource:
+                  - 'arn:aws:s3:::*'
+  
+  # Creates a CloudWatch log group for the Step Functions process Pinpoint unsubscribes state machine
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Join ['-', ['/aws/vendedlogs/states/ProcessPinpointUnsubscribes', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      RetentionInDays: 30
+
+  # Creates a Step Functions state machine to process Pinpoint unsubscribes
+  StepFunctionsStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Join ['-', ['ProcessPinpointUnsubscribes', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      StateMachineType: STANDARD
+      LoggingConfiguration: 
+        Destinations: 
+          - CloudWatchLogsLogGroup: 
+              LogGroupArn: !GetAtt 'StepFunctionsLogGroup.Arn'
+        IncludeExecutionData: true
+        Level: ALL        
+      DefinitionString: !Sub |
+        {
+          "Comment": "Step Functions State Machine to Process Pinpoint Unsubscribe Events",
+          "StartAt": "Start Query Execution",
+          "States": {
+            "Start Query Execution": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:startQueryExecution",
+              "Parameters": {
+                "QueryString": "SELECT application_id, endpoint_id, event_timestamp as unsubscribe_timestamp, destination[1] as email_address, link as unsubscribe_link FROM ${EventAthenaDatabaseName}.email_unsubscribe WHERE event_timestamp > current_timestamp - interval '15' minute;",
+                "WorkGroup": "primary",
+                "ResultConfiguration": {
+                  "OutputLocation": "s3://${PinpointEventsBucket}/unsubscribes/"
+                }
+              },
+              "Next": "Wait",
+              "ResultPath": "$.StepOutput.QueryExecution"
+            },
+            "Wait": {
+              "Type": "Wait",
+              "Seconds": 5,
+              "Next": "Get Query Execution Status"
+            },
+            "Get Query Execution Status": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryExecution",
+              "Parameters": {
+                "QueryExecutionId.$": "$.StepOutput.QueryExecution.QueryExecutionId"
+              },
+              "Next": "Check Query Execution Status",
+              "ResultPath": "$.StepOutput"
+            },
+            "Check Query Execution Status": {
+              "Type": "Choice",
+              "Default": "Get Query Results",
+              "Choices": [
+                {
+                  "Not": {
+                    "Variable": "$.StepOutput.QueryExecution.Status.State",
+                    "StringEquals": "SUCCEEDED"
+                  },
+                  "Next": "Wait"
+                }
+              ]
+            },
+            "Get Query Results": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::athena:getQueryResults",
+              "Parameters": {
+                "QueryExecutionId.$": "$.StepOutput.QueryExecution.QueryExecutionId"
+              },
+              "Next": "Iterate Through Query Results",
+              "ResultPath": "$.StepOutput"
+            },
+            "Iterate Through Query Results": {
+              "Type": "Map",
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "INLINE"
+                },
+                "StartAt": "Parse Query Result Headers",
+                "States": {
+                  "Parse Query Result Headers": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.DataOutput.Data[2].VarCharValue",
+                        "StringEquals": "unsubscribe_timestamp",
+                        "Next": "Parse Query Results Success"
+                      }
+                    ],
+                    "Default": "Check SES Suppression List Preference"
+                  },
+                  "Check SES Suppression List Preference": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.AddToSesSuppressionList",
+                        "BooleanEquals": true,
+                        "Next": "Add Email to SES Suppression List"
+                      }
+                    ],
+                    "Default": "Check Segment OptOut Preference"
+                  },
+                  "Add Email to SES Suppression List": {
+                    "Type": "Task",
+                    "ResultPath": null,
+                    "Parameters": {
+                      "EmailAddress.$": "$.DataOutput.Data[3].VarCharValue",
+                      "Reason": "COMPLAINT"
+                    },
+                    "Resource": "arn:aws:states:::aws-sdk:sesv2:putSuppressedDestination",
+                    "Next": "Add Unsubscribe to Tracking DB (1)"
+                  },
+                  "Add Unsubscribe to Tracking DB (1)": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:putItem",
+                    "Parameters": {
+                      "TableName": "${UnsubscribeTrackingDB}",
+                      "Item": {
+                        "endpoint_id": {
+                          "S.$": "$.DataOutput.Data[1].VarCharValue"
+                        },
+                        "application_id": {
+                          "S.$": "$.DataOutput.Data[0].VarCharValue"
+                        },
+                        "email_address": {
+                          "S.$": "$.DataOutput.Data[3].VarCharValue"
+                        },
+                        "unsubscribe_link": {
+                          "S.$": "$.DataOutput.Data[4].VarCharValue"
+                        },
+                        "unsubscribe_timestamp": {
+                          "S.$": "$.DataOutput.Data[2].VarCharValue"
+                        },
+                        "on_ses_suppression_list": {
+                          "S": "true"
+                        }
+                      }
+                    },
+                    "Next": "Check Segment OptOut Preference",
+                    "ResultPath": null
+                  },
+                  "Check Segment OptOut Preference": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.AddToSegmentOptOut",
+                        "BooleanEquals": true,
+                        "Next": "Unsubscribe Endpoint"
+                      }
+                    ],
+                    "Default": "Unsubscribe Endpoint Success"
+                  },
+                  "Unsubscribe Endpoint": {
+                    "Type": "Task",
+                    "Parameters": {
+                      "ApplicationId.$": "$.DataOutput.Data[0].VarCharValue",
+                      "EndpointId.$": "$.DataOutput.Data[1].VarCharValue",
+                      "EndpointRequest": {
+                        "OptOut": "ALL"
+                      }
+                    },
+                    "Resource": "arn:aws:states:::aws-sdk:pinpoint:updateEndpoint",
+                    "Next": "Add Unsubscribe to Tracking DB (2)",
+                    "ResultPath": null
+                  },
+                  "Add Unsubscribe to Tracking DB (2)": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::dynamodb:updateItem",
+                    "Parameters": {
+                      "TableName": "${UnsubscribeTrackingDB}",
+                      "Key": {
+                        "endpoint_id": {
+                          "S.$": "$.DataOutput.Data[1].VarCharValue"
+                        }
+                      },
+                      "UpdateExpression": "SET application_id = :application_id, email_address = :email_address, unsubscribe_link = :unsubscribe_link, unsubscribe_timestamp = :unsubscribe_timestamp, on_segment_optout = :on_segment_optout",
+                      "ExpressionAttributeValues": {
+                        ":application_id": {
+                          "S.$": "$.DataOutput.Data[0].VarCharValue"
+                        },
+                        ":email_address": {
+                          "S.$": "$.DataOutput.Data[3].VarCharValue"
+                        },
+                        ":unsubscribe_link": {
+                          "S.$": "$.DataOutput.Data[4].VarCharValue"
+                        },
+                        ":unsubscribe_timestamp": {
+                          "S.$": "$.DataOutput.Data[2].VarCharValue"
+                        },
+                        ":on_segment_optout": {
+                          "S": "true"
+                        }
+                      }
+                    },
+                    "End": true
+                  },
+                  "Parse Query Results Success": {
+                    "Type": "Succeed"
+                  },
+                  "Unsubscribe Endpoint Success": {
+                    "Type": "Succeed"
+                  }
+                }
+              },
+              "ResultPath": "$.ResultSet.Rows",
+              "ItemsPath": "$.StepOutput.ResultSet.Rows",
+              "End": true,
+              "ItemSelector": {
+                "AddToSegmentOptOut.$": "$.AddToSegmentOptOut",
+                "AddToSesSuppressionList.$": "$.AddToSesSuppressionList",
+                "DataOutput.$": "$$.Map.Item.Value"
+              }
+            }
+          }
+        }
+      RoleArn: !GetAtt 'StepFunctionsRole.Arn'
+  
+  # Creates a DynamoDB table for tracking processed Pinpoint unsubscribes
+  UnsubscribeTrackingDB:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Join ['-', ['PinpointUnsubscribeTracking', !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+      AttributeDefinitions: 
+        - AttributeName: "endpoint_id"
+          AttributeType: "S"
+      BillingMode: PAY_PER_REQUEST
+      KeySchema: 
+        - AttributeName: "endpoint_id"
+          KeyType: "HASH"
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+Outputs:
+  PinpointEventsS3Bucket:
+    Description: S3 bucket where the Pinpoint events are stored
+    Value: !Join ['', ['https://s3.console.aws.amazon.com/s3/buckets/', !Ref PinpointEventsBucket]]
